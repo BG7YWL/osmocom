@@ -1,5 +1,6 @@
 # OsmocomBB as research and measurement platform
 ## Network load measurement
+![](https://raw.githubusercontent.com/axilirator/osmocom/master/img/netload.png)
 #### measurement.patch
 
 This patch allow you to make load measurements of any cell network. Using modified ccch_scan application you will get statistics in CSV format.
