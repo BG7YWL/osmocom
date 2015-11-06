@@ -1,0 +1,378 @@
+diff --git a/src/host/layer23/src/misc/Makefile.am b/src/host/layer23/src/misc/Makefile.am
+index d8fb322..eccd8f2 100644
+--- a/src/host/layer23/src/misc/Makefile.am
++++ b/src/host/layer23/src/misc/Makefile.am
+@@ -5,7 +5,7 @@ LDADD = ../common/liblayer23.a $(LIBOSMOCORE_LIBS) $(LIBOSMOGSM_LIBS) $(LIBOSMOC
+ bin_PROGRAMS = bcch_scan ccch_scan echo_test cell_log cbch_sniff
+ 
+ bcch_scan_SOURCES = ../common/main.c app_bcch_scan.c bcch_scan.c
+-ccch_scan_SOURCES   = ../common/main.c app_ccch_scan.c rslms.c
++ccch_scan_SOURCES = ../common/main.c app_ccch_scan.c rslms.c
+ echo_test_SOURCES = ../common/main.c app_echo_test.c
+ cell_log_LDADD = $(LDADD) -lm
+ cell_log_SOURCES = ../common/main.c app_cell_log.c cell_log.c \
+diff --git a/src/host/layer23/src/misc/app_ccch_scan.c b/src/host/layer23/src/misc/app_ccch_scan.c
+index f92b13b..861c531 100644
+--- a/src/host/layer23/src/misc/app_ccch_scan.c
++++ b/src/host/layer23/src/misc/app_ccch_scan.c
+@@ -23,6 +23,8 @@
+ #include <stdint.h>
+ #include <errno.h>
+ #include <stdio.h>
++#include <getopt.h>
++#include <time.h>
+ 
+ #include <osmocom/core/msgb.h>
+ #include <osmocom/gsm/rsl.h>
+@@ -41,6 +43,38 @@
+ 
+ #include <l1ctl_proto.h>
+ 
++char *measure_log = "/var/log/measure.log"; // Default logfile path
++int TIME_DURATION = 86400; // Default observation time
++int SLOT_DURATION = 1800; // Default logging interval
++static FILE *results = NULL; // Logfile pointer
++unsigned int time_begin;
++unsigned int time_now;
++extern void *l23_ctx;
++
++static struct {
++	// Total counters //
++	unsigned int pr_total;
++	unsigned int pd_total;
++	unsigned int ia_total;
++
++	// Counters by paging type //
++	unsigned int pr_t1;
++	unsigned int pr_t2;
++	unsigned int pr_t3;
++
++	// Extended or not? //
++	unsigned int ia_normal;
++	unsigned int ia_extended;
++
++	// Hopping or non hopping? //
++	unsigned int ia_hopping;
++	unsigned int ia_non_hopping;
++
++	// IMSI or TMSI //
++	unsigned int pd_imsi;
++	unsigned int pd_tmsi;
++} stats;
++
+ static struct {
+ 	int has_si1;
+ 	int ccch_mode;
+@@ -49,7 +83,6 @@ static struct {
+ 	struct gsm_sysinfo_freq cell_arfcns[1024];
+ } app_state;
+ 
+-
+ static void dump_bcch(struct osmocom_ms *ms, uint8_t tc, const uint8_t *data)
+ {
+ 	struct gsm48_system_information_type_header *si_hdr;
+@@ -182,10 +215,19 @@ static int gsm48_rx_imm_ass(struct msgb *msg, struct osmocom_ms *ms)
+ 	if (ia->page_mode & 0xf0)
+ 		return 0;
+ 
++	stats.ia_total++;
++	stats.ia_normal++;
++
+ 	/* FIXME: compare RA and GSM time with when we sent RACH req */
+ 
+ 	rsl_dec_chan_nr(ia->chan_desc.chan_nr, &ch_type, &ch_subch, &ch_ts);
+ 
++	if ( !ia->chan_desc.h0.h ) {
++		stats.ia_non_hopping++;
++	} else {
++		stats.ia_hopping++;
++	}
++
+ 	if (!ia->chan_desc.h0.h) {
+ 		/* Non-hopping */
+ 		uint16_t arfcn;
+@@ -229,6 +271,25 @@ static int gsm48_rx_imm_ass(struct msgb *msg, struct osmocom_ms *ms)
+ 	return 0;
+ }
+ 
++/* 9.1.19 IMMEDIATE ASSIGNMENT EXTENDED is received */
++static int gsm48_rx_imm_ass_ext(struct msgb *msg, struct osmocom_ms *ms)
++{
++	struct gsm48_imm_ass_ext *ia = msgb_l3(msg);
++
++	LOGP(DRR, LOGL_INFO, "IMMEDIATE ASSIGNMENT EXTENDED is received\n");
++
++	stats.ia_total++;
++	stats.ia_extended++;
++
++	if ( !ia->chan_desc1.h0.h || !ia->chan_desc2.h0.h ) {
++		stats.ia_non_hopping++;
++	} else {
++		stats.ia_hopping++;
++	}
++
++	return 0;
++}
++
+ static const char *pag_print_mode(int mode)
+ {
+ 	switch (mode) {
+@@ -303,6 +364,10 @@ static int gsm48_rx_paging_p1(struct msgb *msg, struct osmocom_ms *ms)
+ 		return -1;
+ 	}
+ 
++	// Type 1 can address up to 2 mobiles using either TMSI or IMSI
++	stats.pr_total++;
++	stats.pr_t1++;
++
+ 	if (mi_type != GSM_MI_TYPE_NONE) {
+ 		gsm48_mi_to_string(mi_string, sizeof(mi_string), &pag->data[1], len1);
+ 		LOGP(DRR, LOGL_NOTICE, "Paging1: %s chan %s to %s M(%s) \n",
+@@ -310,6 +375,14 @@ static int gsm48_rx_paging_p1(struct msgb *msg, struct osmocom_ms *ms)
+ 		     chan_need(pag->cneed1),
+ 		     mi_type_to_string(mi_type),
+ 		     mi_string);
++
++		stats.pd_total++;
++		if ( mi_type == GSM_MI_TYPE_TMSI ) {
++			stats.pd_tmsi++;
++		} else if ( mi_type == GSM_MI_TYPE_IMSI ) {
++			stats.pd_imsi++;
++		}
++
+ 	}
+ 
+ 	/* check if we have a MI type in here */
+@@ -325,13 +398,25 @@ static int gsm48_rx_paging_p1(struct msgb *msg, struct osmocom_ms *ms)
+ 			return -1;
+ 		}
+ 
++		stats.pd_total++;
++		if ( mi_type == GSM_MI_TYPE_TMSI ) {
++			stats.pd_tmsi++;
++		} else if ( mi_type == GSM_MI_TYPE_IMSI ) {
++			stats.pd_imsi++;
++		}
++
+ 		gsm48_mi_to_string(mi_string, sizeof(mi_string), &pag->data[2 + len1 + 2], len2);
+ 		LOGP(DRR, LOGL_NOTICE, "Paging2: %s chan %s to %s M(%s) \n",
+ 		     pag_print_mode(pag->pag_mode),
+ 		     chan_need(pag->cneed2),
+ 		     mi_type_to_string(mi_type),
+ 		     mi_string);
++	} else {
++		if ( tag == GSM48_IE_MOBILE_ID ) {
++			stats.pd_total++;
++		}
+ 	}
++
+ 	return 0;
+ }
+ 
+@@ -346,6 +431,13 @@ static int gsm48_rx_paging_p2(struct msgb *msg, struct osmocom_ms *ms)
+ 		return -1;
+ 	}
+ 
++	// Type 2 can address up to 3 mobiles using 1 by IMSI and other 2 by TMSI
++	stats.pr_total++;
++	stats.pr_t2++;
++
++	stats.pd_total += 2;
++	stats.pd_tmsi += 2;
++
+ 	pag = msgb_l3(msg);
+ 	LOGP(DRR, LOGL_NOTICE, "Paging1: %s chan %s to TMSI M(0x%x) \n",
+ 		     pag_print_mode(pag->pag_mode),
+@@ -377,6 +469,9 @@ static int gsm48_rx_paging_p2(struct msgb *msg, struct osmocom_ms *ms)
+ 	     mi_type_to_string(mi_type),
+ 	     mi_string);
+ 
++	stats.pd_total += 1;
++	stats.pd_imsi += 1;
++
+ 	return 0;
+ }
+ 
+@@ -389,6 +484,13 @@ static int gsm48_rx_paging_p3(struct msgb *msg, struct osmocom_ms *ms)
+ 		return -1;
+ 	}
+ 
++	// Type 3 can address up to 4 mobiles using TMSI only
++	stats.pr_total++;
++	stats.pr_t3++;
++
++	stats.pd_total += 4;
++	stats.pd_tmsi += 4;
++
+ 	pag = msgb_l3(msg);
+ 	LOGP(DRR, LOGL_NOTICE, "Paging1: %s chan %s to TMSI M(0x%x) \n",
+ 		     pag_print_mode(pag->pag_mode),
+@@ -427,11 +529,8 @@ int gsm48_rx_ccch(struct msgb *msg, struct osmocom_ms *ms)
+ 	case GSM48_MT_RR_IMM_ASS:
+ 		gsm48_rx_imm_ass(msg, ms);
+ 		break;
+-	case GSM48_MT_RR_NOTIF_NCH:
+-		/* notification for voice call groups and such */
+-		break;
+-	case 0x07:
+-		/* wireshark know that this is SI2 quater and for 3G interop */
++	case GSM48_MT_RR_IMM_ASS_EXT:
++		gsm48_rx_imm_ass_ext(msg, ms);
+ 		break;
+ 	default:
+ 		LOGP(DRR, LOGL_NOTICE, "unknown PCH/AGCH type 0x%02x\n",
+@@ -490,17 +589,154 @@ static int signal_cb(unsigned int subsys, unsigned int signal,
+ 	return 0;
+ }
+ 
++int measure_init(void)
++{
++	// Prepare logfile //
++	if (!strcmp(measure_log, "-")) {
++		results = stdout;
++	} else {
++		results = fopen(measure_log, "w");
++		// Prepare CSV header
++		fprintf(results, "timestamp;pr_total;pd_total;ia_total;pr1;pr2;pr3;ia_default;ia_extended;ia_hoppig;ia_non_hopping;pd_imsi;pd_tmsi\n");
++	}
++	if (!results) {
++		fprintf(stderr, "Failed to open logfile '%s'\n", measure_log);
++		return -errno;
++	}
++	LOGP(DSUM, LOGL_INFO, "Using '%s' as logfile.\n", measure_log);
++
++	// Set begin time //
++	time_begin = (unsigned) time(NULL);
++	
++	LOGP(DSUM, LOGL_INFO, "Measurement module initialized successfully.\n");
++	return 0;
++}
++
++int log_measurements(struct osmocom_ms *ms)
++{
++	static int current_ts = 0;
++	int ts;
++
++	// Update current time //
++	time_now = (unsigned) time(NULL);
++	ts = (time_now - time_begin) / SLOT_DURATION;
++
++	// Check if time is over //
++	if ( time_now - time_begin > TIME_DURATION ) {
++		close_logfile( NULL );
++		exit( 0 );
++	}
++
++	if ( ts > current_ts ) {
++		current_ts = ts;
++		fprintf(results, "%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u\n",
++			time_now,
++			stats.pr_total, stats.pd_total, stats.ia_total,
++			stats.pr_t1, stats.pr_t2, stats.pr_t3,
++			stats.ia_normal, stats.ia_extended,
++			stats.ia_hopping, stats.ia_non_hopping,
++			stats.pd_imsi, stats.pd_tmsi
++		);
++
++		// Reset the stats!
++		stats.pr_total = 0;
++		stats.pd_total = 0;
++		stats.ia_total = 0;
++		stats.pr_t1 = 0;
++		stats.pr_t2 = 0;
++		stats.pr_t3 = 0;
++		stats.ia_normal = 0;
++		stats.ia_extended = 0;
++		stats.ia_hopping = 0;
++		stats.ia_non_hopping = 0;
++		stats.pd_imsi = 0;
++		stats.pd_tmsi = 0;
++
++		LOGP(DSUM, LOGL_INFO, "Measurement #%d done.\n", ts);
++	}
++
++	return 0;
++}
++
++int close_logfile(struct osmocom_ms *ms)
++{
++	if (results) {
++		fclose(results);
++	}
++
++	LOGP(DSUM, LOGL_INFO, "Measurement complete. See '%s'.\n", measure_log);
++	return 0;
++}
++
+ 
+ int l23_app_init(struct osmocom_ms *ms)
+ {
++	int rc;
++
+ 	osmo_signal_register_handler(SS_L1CTL, &signal_cb, NULL);
+ 	l1ctl_tx_reset_req(ms, L1CTL_RES_T_FULL);
++
++	rc = measure_init();
++	if (rc)
++		return rc;
++
++	l23_app_work = log_measurements;
++	l23_app_exit = close_logfile;
++
+ 	return layer3_init(ms);
+ }
+ 
++static int l23_cfg_print_help()
++{
++	printf("\nApplication specific\n");
++	printf("  -l --logfile          LOGFILE Logfile for the measurements log. (default /var/log/measure.log)\n");
++	printf("  -t --observation-time TIME    Observation time of measurement. (default 86400)\n");
++	printf("  -p --logging-period   TIME    Logfile updating interval. (default 1800)\n");
++
++	return 0;
++}
++
++static int l23_cfg_supported()
++{
++	return L23_OPT_TAP | L23_OPT_DBG;
++}
++
++static int l23_getopt_options(struct option **options)
++{
++	static struct option opts [] = {
++		{"logfile", 1, 0, 'l'},
++		{"observation-time", 1, 0, 't'},
++		{"logging-period", 1, 0, 'p'}
++	};
++
++	*options = opts;
++	return ARRAY_SIZE(opts);
++}
++
++static int l23_cfg_handle(int c, const char *optarg)
++{
++	switch (c) {
++	case 'l':
++		measure_log = talloc_strdup(l23_ctx, optarg);
++		break;
++	case 't':
++		TIME_DURATION = atoi(optarg);
++		break;
++	case 'p':
++		SLOT_DURATION = atoi(optarg);
++		break;
++	}
++	return 0;
++}
++
+ static struct l23_app_info info = {
+ 	.copyright	= "Copyright (C) 2010 Harald Welte <laforge@gnumonks.org>\n",
+ 	.contribution	= "Contributions by Holger Hans Peter Freyther\n",
++	.getopt_string	= "l:t:p:",
++	.cfg_supported	= l23_cfg_supported,
++	.cfg_getopt_opt = l23_getopt_options,
++	.cfg_handle_opt	= l23_cfg_handle,
++	.cfg_print_help	= l23_cfg_print_help,
+ };
+ 
+ struct l23_app_info *l23_app_info()
