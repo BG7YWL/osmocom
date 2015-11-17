@@ -376,3 +376,82 @@ index f92b13b..861c531 100644
  };
  
  struct l23_app_info *l23_app_info()
+diff --git a/src/target/firmware/board/compal_e86/init.c b/src/target/firmware/board/compal_e86/init.c
+index fed9f85..ed3e608 100644
+--- a/src/target/firmware/board/compal_e86/init.c
++++ b/src/target/firmware/board/compal_e86/init.c
+@@ -135,8 +135,9 @@ void board_init(int with_irq)
+ 
+ 	/* Initialize LCD driver (uses UWire) */
+ 	fb_init();
+-	bl_mode_pwl(1);
+-	bl_level(0);
++	
++	/* Disable backlight */
++	bl_mode_pwl(0);
+ 
+ 	/* Initialize keypad driver */
+ 	keypad_init(keymap, with_irq);
+diff --git a/src/target/firmware/board/compal_e88/init.c b/src/target/firmware/board/compal_e88/init.c
+index 04ae458..5014e1d 100755
+--- a/src/target/firmware/board/compal_e88/init.c
++++ b/src/target/firmware/board/compal_e88/init.c
+@@ -131,8 +131,8 @@ void board_init(int with_irq)
+ 	/* Initialize LCD driver (uses I2C) and backlight */
+ 	fb_init();
+ 
+-	bl_mode_pwl(1);
+-	bl_level(50);
++	/* Disable backlight */
++	bl_mode_pwl(0);
+ 
+ 	/* Initialize keypad driver */
+ 	keypad_init(keymap, with_irq);
+diff --git a/src/target/firmware/board/compal_e99/init.c b/src/target/firmware/board/compal_e99/init.c
+index 7cc3c67..308478b 100644
+--- a/src/target/firmware/board/compal_e99/init.c
++++ b/src/target/firmware/board/compal_e99/init.c
+@@ -133,9 +133,8 @@ void board_init(int with_irq)
+ 	/* Initialize system timers (uses hwtimer 2) */
+ 	timer_init();
+ 
+-	/* Initialize LCD driver (uses UWire) and backlight */
+-	bl_mode_pwl(1);
+-	bl_level(50);
++	/* Disable backlight */
++	bl_mode_pwl(0);
+ 
+ 	fb_init();
+ 
+diff --git a/src/target/firmware/board/gta0x/init.c b/src/target/firmware/board/gta0x/init.c
+index 4f49e80..e657e5a 100644
+--- a/src/target/firmware/board/gta0x/init.c
++++ b/src/target/firmware/board/gta0x/init.c
+@@ -126,9 +126,8 @@ void board_init(int with_irq)
+ 	/* Initialize system timers (uses hwtimer 2) */
+ 	timer_init();
+ 
+-	/* Initialize LCD driver (uses I2C) and backlight */
+-	bl_mode_pwl(1);
+-	bl_level(50);
++	/* Disable backlight */
++	bl_mode_pwl(0);
+ 
+ 	/* Initialize keypad driver */
+ 	keypad_init(keymap, with_irq);
+diff --git a/src/target/firmware/board/pirelli_dpl10/init.c b/src/target/firmware/board/pirelli_dpl10/init.c
+index 4c74a6d..b4cd4da 100644
+--- a/src/target/firmware/board/pirelli_dpl10/init.c
++++ b/src/target/firmware/board/pirelli_dpl10/init.c
+@@ -142,9 +142,8 @@ void board_init(int with_irq)
+ 	/* Initialize system timers (uses hwtimer 2) */
+ 	timer_init();
+ 
+-	/* Initialize LCD driver and backlight (0 is max, 255 min brightness) */
+-	bl_mode_pwl(1);
+-	bl_level(50);
++	/* Disable backlight */
++	bl_mode_pwl(0);
+ 
+ 	fb_init();
+ 
